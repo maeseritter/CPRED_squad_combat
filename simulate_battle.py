@@ -16,7 +16,7 @@ attacker_hp = 25
 attacker_armor = 7
 # Dice of damage that the main weapon does
 attacker_dice = 4
-# Tactics of the attacker squad leader
+# INT + Tactics of the attacker squad leader
 attacker_tactics = 10
 # Condition of the attacker (values: ambush)
 attacker_condition = None
@@ -32,7 +32,7 @@ defender_hp = 25
 defender_armor = 7
 # Dice of damage that the main weapon does
 defender_dice = 4
-# Tactics of the attacker squad leader
+# INT + Tactics of the attacker squad leader
 defender_tactics = 10
 # Condition of the attacker (values: hastydef/gooddef)
 defender_condition = None
@@ -62,7 +62,7 @@ condition_mods = {
 
 # Utils
 def _quality(base_skill):
-    if base_skill <=9:
+    if base_skill <= 9:
         return "2-9"
     elif 9 < base_skill <= 13:
         return "10-13"
@@ -84,9 +84,9 @@ def rolld10():
 
 def get_dmg_percentages(diff):
     abs_diff = abs(diff)
-    if 0 <= abs_diff < 6:
+    if 0 <= abs_diff < 5:
         percentages = (0.5, 0.5)
-    if 6 <= abs_diff < 10:
+    elif 5 <= abs_diff < 10:
         percentages = (0.6, 0.4)
     elif 10 <= abs_diff < 15:
         percentages = (0.7, 0.3)
@@ -112,8 +112,8 @@ class Unit(object):
         self.dice = dice
         self.quality = _quality(self.base_skill)
 
-    def damage(self, damage):
-        self.hp -= damage
+    def damage(self, dmg):
+        self.hp -= dmg
         if self.hp <= 0:
             overflow = abs(self.hp)
             self.hp = 0 if self.hp < 0 else self.hp
@@ -149,7 +149,8 @@ class Forces(object):
             self._last_ablated += 1
             if (self._last_ablated >= len(self.units)):
                 self._last_ablated = 0
-            self.units[self._last_ablated].armor -= 1
+            if self.units[self._last_ablated].armor > 0:
+                self.units[self._last_ablated].armor -= 1
 
     @property
     def alive_units(self):
@@ -165,13 +166,13 @@ class Forces(object):
     def hp(self):
         return sum([unit.hp for unit in self.units])
 
-    def damage(self, damage):
-        overflow = damage - self.armor
+    def damage(self, dmg):
+        overflow = dmg - self.armor
         while (overflow > 0):
             if not self._next_alive():
                 return
             overflow = self._next_alive().damage(overflow)
-        self.ablate_armor(damage // self.armor_avg)
+        self.ablate_armor(dmg // self.armor_avg)
 
     @property
     def losses(self):
@@ -194,9 +195,10 @@ class Forces(object):
 
 
 class CombatRound(object):
-    def __init__(self, number, tactics, damage, actual_damage, multiplier, losses, hp, armor):
+    def __init__(self, number, tactics, modifier, damage, actual_damage, multiplier, losses, hp, armor):
         self.number = number
         self.attacker_tactics, self.defender_tactics = tactics
+        self.attacker_modifier, self.defender_modifier = modifier
         self.attacker_damage, self.defender_damage = damage
         self.attacker_actual_damage, self.defender_actual_damage = actual_damage
         self.attacker_multiplier, self.defender_multiplier = multiplier
@@ -213,6 +215,7 @@ class CombatRound(object):
         print(f"Atk losses: {self.attacker_losses} / Def losses: {self.defender_losses}")
         print(f"Atk armor: {self.attacker_armor} / Def armor: {self.defender_armor}")
         print("")
+
 
 class SquadCombat(object):
     def __init__(self, attacker, defender, recalculate_ratio=False, report=False):
@@ -250,12 +253,13 @@ class SquadCombat(object):
 
     def simulate_round(self, round_number):
         def get_roll(forces, ratio_mod=0):
-            return rolld10() + forces.leader_tactics + forces.condition_mod + forces.quality_mod + forces.losses_mod + ratio_mod
+            modifier = forces.leader_tactics + forces.condition_mod + forces.quality_mod + forces.losses_mod + ratio_mod
+            return (rolld10(), modifier)
 
         # Calculate tactics roll
-        attacker_roll = get_roll(self.attacker, self.ratio_mod)
-        defender_roll = get_roll(self.defender)
-        tactics_diff = attacker_roll - defender_roll
+        attacker_roll, attacker_modifier = get_roll(self.attacker, self.ratio_mod)
+        defender_roll, defender_modifier = get_roll(self.defender)
+        tactics_diff = attacker_roll + attacker_modifier - (defender_roll + defender_modifier)
 
         # Calculate attacks
         attacker_damage = self.attacker.roll_attack()
@@ -274,6 +278,7 @@ class SquadCombat(object):
         self.rounds.append(CombatRound(
             round_number,
             (attacker_roll, defender_roll),
+            (attacker_modifier, defender_modifier),
             (attacker_damage, defender_damage),
             (attacker_actual_damage, defender_actual_damage),
             (attacker_multiplier, defender_multiplier),
@@ -326,6 +331,12 @@ for combat in combats:
                 "count": 0,
                 "atk_avg_roll": 0,
                 "def_avg_roll": 0,
+                "atk_avg_mod": 0,
+                "def_avg_mod": 0,
+                "atk_avg_mult": 0,
+                "def_avg_mult": 0,
+                "atk_avg_fulldmg": 0,
+                "def_avg_fulldmg": 0,
                 "atk_avg_dmg": 0,
                 "def_avg_dmg": 0,
                 "atk_avg_losses": 0,
@@ -338,6 +349,12 @@ for combat in combats:
         avg_stats_per_round[round.number]["count"] += 1
         avg_stats_per_round[round.number]["atk_avg_roll"] += round.attacker_tactics
         avg_stats_per_round[round.number]["def_avg_roll"] += round.defender_tactics
+        avg_stats_per_round[round.number]["atk_avg_mod"] += round.attacker_modifier
+        avg_stats_per_round[round.number]["def_avg_mod"] += round.defender_modifier
+        avg_stats_per_round[round.number]["atk_avg_mult"] += round.attacker_multiplier
+        avg_stats_per_round[round.number]["def_avg_mult"] += round.defender_multiplier
+        avg_stats_per_round[round.number]["atk_avg_fulldmg"] += round.attacker_damage
+        avg_stats_per_round[round.number]["def_avg_fulldmg"] += round.defender_damage
         avg_stats_per_round[round.number]["atk_avg_dmg"] += round.attacker_actual_damage
         avg_stats_per_round[round.number]["def_avg_dmg"] += round.defender_actual_damage
         avg_stats_per_round[round.number]["atk_avg_losses"] += round.attacker_losses
@@ -345,11 +362,17 @@ for combat in combats:
         avg_stats_per_round[round.number]["atk_avg_hp"] += round.attacker_hp
         avg_stats_per_round[round.number]["def_avg_hp"] += round.defender_hp
         avg_stats_per_round[round.number]["atk_avg_armor"] += round.attacker_armor
-        avg_stats_per_round[round.number]["atk_avg_armor"] += round.attacker_armor
+        avg_stats_per_round[round.number]["def_avg_armor"] += round.defender_armor
 
 for round in avg_stats_per_round.keys():
     avg_stats_per_round[round]["atk_avg_roll"] = avg_stats_per_round[round]["atk_avg_roll"] / avg_stats_per_round[round]["count"]
     avg_stats_per_round[round]["def_avg_roll"] = avg_stats_per_round[round]["def_avg_roll"] / avg_stats_per_round[round]["count"]
+    avg_stats_per_round[round]["atk_avg_mod"] = avg_stats_per_round[round]["atk_avg_mod"] / avg_stats_per_round[round]["count"]
+    avg_stats_per_round[round]["def_avg_mod"] = avg_stats_per_round[round]["def_avg_mod"] / avg_stats_per_round[round]["count"]
+    avg_stats_per_round[round]["atk_avg_mult"] = avg_stats_per_round[round]["atk_avg_mult"] / avg_stats_per_round[round]["count"]
+    avg_stats_per_round[round]["def_avg_mult"] = avg_stats_per_round[round]["def_avg_mult"] / avg_stats_per_round[round]["count"]
+    avg_stats_per_round[round]["atk_avg_fulldmg"] = avg_stats_per_round[round]["atk_avg_fulldmg"] / avg_stats_per_round[round]["count"]
+    avg_stats_per_round[round]["def_avg_fulldmg"] = avg_stats_per_round[round]["def_avg_fulldmg"] / avg_stats_per_round[round]["count"]
     avg_stats_per_round[round]["atk_avg_dmg"] = avg_stats_per_round[round]["atk_avg_dmg"] / avg_stats_per_round[round]["count"]
     avg_stats_per_round[round]["def_avg_dmg"] = avg_stats_per_round[round]["def_avg_dmg"] / avg_stats_per_round[round]["count"]
     avg_stats_per_round[round]["atk_avg_losses"] = avg_stats_per_round[round]["atk_avg_losses"] / avg_stats_per_round[round]["count"]
@@ -357,7 +380,7 @@ for round in avg_stats_per_round.keys():
     avg_stats_per_round[round]["atk_avg_hp"] = avg_stats_per_round[round]["atk_avg_hp"] / avg_stats_per_round[round]["count"]
     avg_stats_per_round[round]["def_avg_hp"] = avg_stats_per_round[round]["def_avg_hp"] / avg_stats_per_round[round]["count"]
     avg_stats_per_round[round]["atk_avg_armor"] = avg_stats_per_round[round]["atk_avg_armor"] / avg_stats_per_round[round]["count"]
-    avg_stats_per_round[round]["atk_avg_armor"] = avg_stats_per_round[round]["atk_avg_armor"] / avg_stats_per_round[round]["count"]
+    avg_stats_per_round[round]["def_avg_armor"] = avg_stats_per_round[round]["def_avg_armor"] / avg_stats_per_round[round]["count"]
 avg_rounds = avg_rounds/simulations
 
 print("#" * 40)
@@ -368,6 +391,12 @@ for round in avg_stats_per_round.keys():
     print(f'Number of combats reached this round: {avg_stats_per_round[round]["count"]}')
     print(f'Average attacker roll: {avg_stats_per_round[round]["atk_avg_roll"]}')
     print(f'Average defender roll: {avg_stats_per_round[round]["def_avg_roll"]}')
+    print(f'Average attacker modifier: {avg_stats_per_round[round]["atk_avg_mod"]}')
+    print(f'Average defender modifier: {avg_stats_per_round[round]["def_avg_mod"]}')
+    print(f'Average attacker multiplier: {avg_stats_per_round[round]["atk_avg_mult"]}')
+    print(f'Average defender multiplier: {avg_stats_per_round[round]["def_avg_mult"]}')
+    print(f'Average attacker full damage: {avg_stats_per_round[round]["atk_avg_fulldmg"]}')
+    print(f'Average defender full damage: {avg_stats_per_round[round]["def_avg_fulldmg"]}')
     print(f'Average attacker damage: {avg_stats_per_round[round]["atk_avg_dmg"]}')
     print(f'Average defender damage: {avg_stats_per_round[round]["def_avg_dmg"]}')
     print(f'Average attacker losses: {avg_stats_per_round[round]["atk_avg_losses"]}')
